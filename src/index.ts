@@ -1,9 +1,10 @@
 import { ApolloServer } from "@apollo/server";
 import { startStandaloneServer } from "@apollo/server/standalone";
+import pool from "./db";
 
-// 1. GraphQL Schema
+// GraphQL Schema
 const typeDefs = `#graphql
-  type Repository {
+  type Repo {
     id: ID!
     name: String!
     url: String!
@@ -12,55 +13,54 @@ const typeDefs = `#graphql
   }
 
   type Query {
-    trackedRepositories: [Repository!]!
-    repository(id: ID!): Repository
+    trackedRepos: [Repo!]!
+    repo(id: ID!): Repo
   }
 
   type Mutation {
-    addRepository(name: String!, url: String!): Repository!
-    removeRepository(id: ID!): Boolean!
+    addRepo(name: String!, url: String!): Repo!
+    removeRepo(id: ID!): Boolean!
   }
 `;
 
-// 2. Hard-coded data
-const repos = [
-  { id: "1", name: "react", url: "https://github.com/facebook/react" },
-  { id: "2", name: "next.js", url: "https://github.com/vercel/next.js" },
-];
-
-// 3. Resolvers
+// Resolvers
 const resolvers = {
   Query: {
-    trackedRepositories: () => repos,
-    repository: (_parent: undefined, { id }: { id: string }) => repos.find(repo => repo.id === id),
+    trackedRepos: async () => {
+      const result = await pool.query('SELECT * FROM repos ORDER BY id');
+      return result.rows;
+    },
+
+    repo: async (_parent: undefined, { id }: { id: string }) => {
+      const result = await pool.query('SELECT * FROM repos WHERE id = $1', [id]);
+      return result.rows[0] || null;
+    },
   },
 
   Mutation: {
-    addRepository: (_parent: undefined, args: { name: string; url: string }) => {
-      const nameExists = repos.find(repo => repo.name === args.name);
-      if (nameExists) {
-        throw new Error(`Repository with name "${args.name}" already exists`);
+    addRepo: async (_parent: undefined, args: { name: string; url: string }) => {
+      const nameCheck = await pool.query('SELECT * FROM repos WHERE name = $1', [args.name]);
+      if (nameCheck.rows.length > 0) {
+        throw new Error('Repo with this name already exists');
       }
 
-      const urlExists = repos.find(repo => repo.url === args.url);
-      if (urlExists) {
-        throw new Error(`Repository with URL "${args.url}" already exists`);
+      // Check if URL exists
+      const urlCheck = await pool.query('SELECT * FROM repos WHERE url = $1', [args.url]);
+      if (urlCheck.rows.length > 0) {
+        throw new Error('Repo with this URL already exists');
       }
 
-      const newRepo = {
-        id: String(repos.length + 1),
-        ...args,
-      };
-      repos.push(newRepo);
-      return newRepo;
+      // Insert new Repo
+      const result = await pool.query(
+        'INSERT INTO repos (name, url) VALUES ($1, $2) RETURNING *',
+        [args.name, args.url]
+      );
+
+      return result.rows[0];
     },
-    removeRepository: (_parent: undefined, { id }: { id: string }) => {
-      const index = repos.findIndex(repo => repo.id === id);
-      if (index > -1) {
-        repos.splice(index, 1);
-        return true;
-      }
-      return false;
+    removeRepo: async (_parent: undefined, { id }: { id: string }) => {
+      const result = await pool.query('DELETE FROM repos WHERE id = $1', [id]);
+      return result.rows.length > 0;
     },
   }
 };
